@@ -1,0 +1,7 @@
+Horizontal { align: center middle; height: auto; }
+SpinnerWidget { width: auto; height: 1; }
+
+TableScreen { overflow-x: hidden; overflow-y: hidden;}
+
+#footer { dock: bottom; height: auto; }
+#footer_static { margin: 1 0 0 0; }

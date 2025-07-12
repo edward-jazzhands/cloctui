@@ -1,0 +1,53 @@
+[project]
+name = "cloctui"
+version = "0.1.0"
+description = "A TUI interface for the CLOC code analysis tool, using the Textual framework."
+readme = "README.md"
+authors = [
+    { name = "Edward Jazzhands", email = "ed.jazzhands@gmail.com" }
+]
+license = { text = "MIT" }
+keywords = ["python", "textual", "tui", "slidecontainer", "widget"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1.8",
+    "textual>=3.7.1",
+]
+
+[project.scripts]
+cloctui = "cloctui.cli:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.urls]
+Repository = "https://github.com/edward-jazzhands/cloctui"
+Changelog = "https://github.com/edward-jazzhands/cloctui/blob/master/Changelog.md"
+
+[dependency-groups]
+dev = [
+    "black>=24.8.0",
+    "mypy>=1.14.1",
+    "ruff>=0.11.8",
+    "textual-dev>=1.7.0",
+]
+
+[tool.black]
+line-length = 110
+
+[tool.mypy]
+python_version = "3.10"
+pretty = true
+strict = true
