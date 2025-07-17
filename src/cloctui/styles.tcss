@@ -2,6 +2,22 @@ Horizontal { align: center middle; height: auto; }
 SpinnerWidget { width: auto; height: 1; }
 
 TableScreen { overflow-x: hidden; overflow-y: hidden;}
+#main_table {
+    height: auto;
+}
 
-#footer { dock: bottom; height: auto; }
-#footer_static { margin: 1 0 0 0; }
+#summary_container {
+    height: 1;
+    background: $panel-darken-1;
+    width: auto;
+}
+#sum_label { width: 1fr; text-align: right; }
+#sum_files { width: 16; }
+#sum_blank { width: 9; }
+#sum_comment { width: 11; }
+#sum_code { width: 9; }
+#sum_total { width: 10; }
+#sum_filler { width: 1fr; }
+
+#footer_static { height: 1; background: $panel-darken-1; }
+#quit_message { margin: 1 0 0 0; }

@@ -8,22 +8,23 @@
 
 # python standard lib
 from __future__ import annotations
-from typing import TypedDict, Union, cast
+from typing import TypedDict, Union, cast, Any
 import subprocess
 import os
+import shutil
 import json
+from enum import Enum
 
 # Textual imports
 # from textual import getters
 from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import Static, DataTable
-
-# from textual.widgets.data_table import ColumnKey
-from textual.widgets.data_table import CellType
+from textual.widgets.data_table import ColumnKey, Column
 from textual.screen import Screen
 from textual.message import Message
 from textual.containers import Horizontal, Vertical
+from textual.binding import Binding
 from rich.text import Text
 
 # Local imports
@@ -74,6 +75,24 @@ class CLOC:
         self.flags: list[str] = []
         self.arguments: list[str] = []
         self.working_directory = os.getcwd()
+
+    def check_cloc_installed(self) -> bool:
+        """Checks if CLOC is installed on the system."""
+        try:
+            # Use shutil.which to check if cloc is in PATH
+            if shutil.which("cloc") is None:
+                return False
+            # Verify cloc can be executed
+            subprocess.run(
+                ["cloc", "--version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
 
     def add_option(self, option: str, value: int) -> CLOC:
         """Adds an option with a value (e.g., --output file.txt).
@@ -150,81 +169,217 @@ class CLOC:
             raise CLOCException(message, error.returncode)
 
 
+class CLOCNotInstalledScreen(Screen[None]):
+    """Screen to display when CLOC is not installed."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="error_container"):
+            yield Static(
+                "[bold red]CLOC is not installed on your system.[/bold red]\n"
+                "Please install CLOC to use this application.\n"
+                "Visit https://github.com/AlDanial/cloc for installation instructions."
+            )
+
+    def on_mount(self):
+        self.app.exit()
+
+
+class CustomDataTable(DataTable[Any]):
+
+
+    class UpdateSummarySize(Message):
+        def __init__(self, size: int):
+            super().__init__()
+            self.size = size
+            "The new size for the summary row's first column."
+
+
+    class SortingStatus(Enum):
+        UNSORTED = 0  #     [-] unsorted
+        ASCENDING = 1  #    [↑] ascending (reverse = True)
+        DESCENDING = 2  #   [↓] descending (reverse = False)    
+
+    COL_SIZES = {
+        "path": 15, # dynamic column minimum
+        "language": 14,
+        "blank": 7,
+        "comment": 9,
+        "code": 7,
+        "total": 7,
+    }
+    other_cols_total = sum(COL_SIZES.values()) - COL_SIZES["path"]
+
+    sort_status: dict[str, SortingStatus] = {
+        "path": SortingStatus.UNSORTED, 
+        "language": SortingStatus.UNSORTED, 
+        "blank": SortingStatus.UNSORTED, 
+        "comment": SortingStatus.UNSORTED,
+        "code": SortingStatus.UNSORTED,
+        "total": SortingStatus.UNSORTED,
+    }
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+        self.add_column("path [yellow]-[/]", width=self.COL_SIZES['path'], key="path")
+        self.add_column("language [yellow]-[/]", width=self.COL_SIZES['language'], key="language")
+        self.add_column("blank [yellow]-[/]", width=self.COL_SIZES['blank'], key="blank")
+        self.add_column("comment [yellow]-[/]", width=self.COL_SIZES['comment'], key="comment")
+        self.add_column("code [yellow]-[/]", width=self.COL_SIZES['code'], key="code")
+        self.add_column("total [yellow]-[/]", width=self.COL_SIZES['total'], key="total")        
+
+    def on_resize(self) -> None:
+        
+        # Account for padding on both sides of each column:
+        total_cell_padding = (self.cell_padding*2) * len(self.columns)
+
+        # Pretty obvious how this works I think:
+        first_col_width = self.size.width - self.other_cols_total - total_cell_padding
+
+        # Prevent column from being smaller than the chosen minimum:
+        if first_col_width < self.COL_SIZES["path"]:
+            first_col_width = self.COL_SIZES["path"]
+
+        self.columns[ColumnKey("path")].width = first_col_width
+        self.refresh()
+        self.post_message(
+            CustomDataTable.UpdateSummarySize(size=first_col_width+3)
+        )
+
+    @on(DataTable.HeaderSelected)
+    def header_selected(self, event: DataTable.HeaderSelected) -> None:
+              
+        column = self.columns[event.column_key]
+        self.sort_column(column, column.key)
+
+    
+    def sort_column(self, column: Column, column_key: ColumnKey) -> None:
+
+        if column_key.value is None:
+            raise ValueError("Tried to sort a column with no key.")
+        if column_key.value not in self.sort_status:
+            raise ValueError(
+                f"Unknown column key: {column_key.value}. "
+                "This should never happen, please report this issue."
+            )
+
+        value = column_key.value
+
+        # if its currently unsorted, that means the user is switching columns
+        # to sort. Reset all other columns to unsorted.
+        if self.sort_status[value] == self.SortingStatus.UNSORTED:
+            for key in self.sort_status:
+                self.sort_status[key] = self.SortingStatus.UNSORTED
+                col_index = self.get_column_index(key)
+                col = self.ordered_columns[col_index]
+                col.label = Text.from_markup(f"{key} [yellow]-[/]")
+
+            # Now set chosen column to ascending:
+            self.sort_status[value] = self.SortingStatus.ASCENDING
+            self.sort(column_key, reverse=True)
+            column.label = Text.from_markup(f"{value} [yellow]↑[/]")
+
+        # For the other two conditions, we just toggle ascending/descending
+        elif self.sort_status[value] == self.SortingStatus.ASCENDING:
+            self.sort_status[value] = self.SortingStatus.DESCENDING
+            self.sort(value, reverse=False)
+            column.label = Text.from_markup(f"{value} [yellow]↓[/]")
+        elif self.sort_status[value] == self.SortingStatus.DESCENDING:
+            self.sort_status[value] = self.SortingStatus.ASCENDING
+            self.sort(column_key, reverse=True)
+            column.label = Text.from_markup(f"{value} [yellow]↑[/]")
+        else:
+            raise ValueError(
+                f"Sort status for {value} is '{self.sort_status[value]}' "
+                "did not meet any expected values."
+            )
+
+
+class SummaryBar(Horizontal):
+    """A horizontal bar to display summary statistics."""
+
+    def compose(self) -> ComposeResult:
+        """Compose the summary bar with static text."""
+        yield Static("SUM:  ", id="sum_label")
+        yield Static(id="sum_files")
+        yield Static(id="sum_blank")
+        yield Static(id="sum_comment")
+        yield Static(id="sum_code")
+        yield Static(id="sum_total")
+        yield Static(id="sum_filler")
+
+    def on_mount(self) -> None:
+        # The +2s here are all to account for the padding on both sides of each column.
+        self.query_one("#sum_label").styles.width = CustomDataTable.COL_SIZES["path"] + 2
+        self.query_one("#sum_files").styles.width = CustomDataTable.COL_SIZES["language"] + 2
+        self.query_one("#sum_blank").styles.width = CustomDataTable.COL_SIZES["blank"] + 2
+        self.query_one("#sum_comment").styles.width = CustomDataTable.COL_SIZES["comment"] + 2
+        self.query_one("#sum_code").styles.width = CustomDataTable.COL_SIZES["code"] + 2
+        self.query_one("#sum_total").styles.width = CustomDataTable.COL_SIZES["total"] + 2
+
+    def update_summary(self, summary_data: ClocSummaryStats) -> None:
+
+        self.query_one("#sum_files", Static).update(
+            f"{summary_data['nFiles']} files"
+        )
+        self.query_one("#sum_blank", Static).update(
+            f"{summary_data['blank']}"
+        )
+        self.query_one("#sum_comment", Static).update(
+            f"{summary_data['comment']}"
+        )
+        self.query_one("#sum_code", Static).update(
+            f"{summary_data['code']}"
+        )
+        self.query_one("#sum_total", Static).update(
+            f"{summary_data['blank'] + summary_data['comment'] + summary_data['code']}"
+        )
+
+
 class TableScreen(Screen[None]):
 
-    sort_dict_status: dict[str, int] = {
-        "path": 0,  # 0 = unsorted
-        "language": 0,  # 1 = ascending (reverse = True)
-        "blank": 0,  # 2 = descending (reverse = False)
-        "comment": 0,
-        "code": 0,
-        "total": 0,
-    }
+    BINDINGS = [
+        Binding("1", "sort_column('path')", "Path"),
+        Binding("2", "sort_column('language')", "Language"),
+        Binding("3", "sort_column('blank')", "Blank Lines"),
+        Binding("4", "sort_column('comment')", "Comment Lines"),
+        Binding("5", "sort_column('code')", "Code Lines"),
+        Binding("6", "sort_column('total')", "Total"),
+    ]
 
     def __init__(self, result: ClocJsonResult):
         """Initializes the TableScreen with the CLOC JSON result."""
         super().__init__()
         self.result = result
-        self.datatable = DataTable[CellType](id="main_table")  #  type: ignore
-        self.sum_datatable = DataTable[CellType](show_header=False, id="summary")  # type: ignore
 
     def compose(self) -> ComposeResult:
 
         yield Static(id="header_static")
-        yield self.datatable
-        with Vertical(id="footer"):
-            yield self.sum_datatable
-            yield Static("[italic]Press ctrl+q to exit", id="footer_static")
+        yield CustomDataTable()
+        yield SummaryBar()
+        yield Static("[dim yellow]1-6[/] to sort columns", id="footer_static")
+        yield Static("[italic]Press ctrl+q to exit", id="quit_message")
 
-    def on_mount(self) -> None:
-
-        self.call_after_refresh(self.finish_loading)
-
-    def finish_loading(self) -> None:
-
-        if self.size.width == 0:
-            raise RuntimeError("Screen size is zero, cannot determine column widths.")
-
-        first_col = self.size.width - 58
-        if first_col < 10:
-            first_col = 10
-
-        self.datatable.add_column("path [yellow]-[/]", width=first_col, key="path")
-        self.datatable.add_column("language [yellow]-[/]", width=14, key="language")
-        self.datatable.add_column("blank [yellow]-[/]", width=7, key="blank")
-        self.datatable.add_column("comment [yellow]-[/]", width=9, key="comment")
-        self.datatable.add_column("code [yellow]-[/]", width=7, key="code")
-        self.datatable.add_column("total [yellow]-[/]", width=7, key="total")
-        self.sum_datatable.add_column("path", width=first_col)
-        self.sum_datatable.add_column("files", width=14)
-        self.sum_datatable.add_column("blank", width=7)
-        self.sum_datatable.add_column("comment", width=9)
-        self.sum_datatable.add_column("code", width=7)
-        self.sum_datatable.add_column("total", width=7)
+    async def on_mount(self) -> None:
+        
+        table = self.query_one(CustomDataTable)
+        header = self.query_one("#header_static", Static)
+        summary = self.query_one(SummaryBar)
 
         for key, value in self.result.items():
             if key == "header":
-                header: ClocHeader = cast(ClocHeader, value)
-                header_static = self.query_one("#header_static", Static)
-                header_static.update(
-                    f"Running on CLOC v{header['cloc_version']}\n"
-                    f"Elapsed time: {header['elapsed_seconds']:.2f} sec | "
-                    f"Files counted: {header['n_files']} | Lines counted: {header['n_lines']}"
+                header_data: ClocHeader = cast(ClocHeader, value)
+                header.update(
+                    f"Running on CLOC v{header_data['cloc_version']}\n"
+                    f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec | "
+                    f"Files counted: {header_data['n_files']} | Lines counted: {header_data['n_lines']}"
                 )
             elif key == "SUM":
-                summary: ClocSummaryStats = cast(ClocSummaryStats, value)
-
-                self.sum_datatable.add_row(
-                    "SUM:",
-                    f"{summary['nFiles']} files",
-                    summary["blank"],
-                    summary["comment"],
-                    summary["code"],
-                    summary["blank"] + summary["comment"] + summary["code"],
-                )
+                summary_data: ClocSummaryStats = cast(ClocSummaryStats, value)
+                summary.update_summary(summary_data)
             else:
                 file_stats: ClocFileStats = cast(ClocFileStats, value)
-                self.datatable.add_row(
+                table.add_row(
                     key,  # This is the file path
                     file_stats["language"],
                     file_stats["blank"],
@@ -233,57 +388,18 @@ class TableScreen(Screen[None]):
                     file_stats["blank"] + file_stats["comment"] + file_stats["code"],
                 )
 
-        col_index = self.datatable.get_column_index("total")
-        total_col = self.datatable.ordered_columns[col_index]
+        await self.run_action("sort_column('total')")
 
-        message = DataTable.HeaderSelected(self.datatable, total_col.key, col_index, label=total_col.label)
-        self.datatable.post_message(message)
+    @on(CustomDataTable.UpdateSummarySize)
+    def update_summary_size(self, message: CustomDataTable.UpdateSummarySize) -> None:
+        "Adjust first column of summary row when table is resized."
+        self.query_one("#sum_label", Static).styles.width = message.size
 
-    @on(DataTable.HeaderSelected)
-    def header_selected(self, event: DataTable.HeaderSelected) -> None:
-        """Handles header selection for sorting."""
-
-        if event.column_key.value is None:
-            raise ValueError("Tried to sort a column with no key.")
-        if event.column_key.value not in self.sort_dict_status:
-            raise ValueError(
-                f"Unknown column key: {event.column_key.value}. "
-                "This should never happen, please report this issue."
-            )
-
-        column = self.datatable.ordered_columns[event.column_index]
-        value = event.column_key.value
-
-        # if its currently unsorted, that means the user is switching columns
-        # to sort. Reset all other columns to unsorted.
-        if self.sort_dict_status[value] == 0:
-            for key in self.sort_dict_status:
-                self.sort_dict_status[key] = 0
-                col_index = self.datatable.get_column_index(key)
-                col = self.datatable.ordered_columns[col_index]
-                col.label = Text.from_markup(f"{key} [yellow]-[/]")
-            self.sort_dict_status[value] = 1
-            self.datatable.sort(event.column_key, reverse=True)
-            column.label = Text.from_markup(f"{value} [yellow]↑[/]")
-
-        # For the other two conditions, we just toggle the sort order
-        elif self.sort_dict_status[value] == 1:
-            self.sort_dict_status[value] = 2
-            self.datatable.sort(value, reverse=False)
-            column.label = Text.from_markup(f"{value} [yellow]↓[/]")
-        elif self.sort_dict_status[value] == 2:
-            self.sort_dict_status[value] = 1
-            self.datatable.sort(event.column_key, reverse=True)
-            column.label = Text.from_markup(f"{value} [yellow]↑[/]")
-        else:
-            raise ValueError(
-                f"Sort status for {value} is '{self.sort_dict_status[value]}' "
-                "did not meet any expected values."
-            )
-
-        # self.datatable.update_cell
-        # self.datatable.refresh_column(event.column_index)
-
+    def action_sort_column(self, column_key: str) -> None:
+        table = self.query_one(CustomDataTable)
+        column = table.columns[ColumnKey(column_key)]
+        table.sort_column(column, column.key)
+        
 
 class ClocTUI(App[None]):
 
@@ -312,22 +428,33 @@ class ClocTUI(App[None]):
             yield SpinnerWidget(text="Counting Lines of Code", spinner_type="line")
             yield SpinnerWidget(spinner_type="simpleDotsScrolling")
 
+    def on_ready(self) -> None:
+        self.run_worker(self.execute_cloc, thread=True)
+
     def execute_cloc(self) -> None:
         """Executes the CLOC command and returns the parsed JSON result."""
 
-        result: ClocJsonResult = json.loads(
+        cloc = (
             CLOC()
             .add_flag("--by-file")
             .add_flag("--json")
             .add_option("--timeout", self.timeout)
             .set_working_directory(self.working_directory)
             .add_argument(self.dir_to_scan)
-            .execute()
         )
-        self.post_message(ClocTUI.WorkerFinished(result=result))
+        
+        # Check if CLOC is installed before attempting to execute
+        if not cloc.check_cloc_installed():
+            self.push_screen(CLOCNotInstalledScreen())
+            return
 
-    def on_ready(self) -> None:
-        self.run_worker(self.execute_cloc, thread=True)
+        try:
+            output = cloc.execute()
+        except CLOCException as e:
+            raise e
+
+        result: ClocJsonResult = json.loads(output)
+        self.post_message(ClocTUI.WorkerFinished(result=result))
 
     @on(WorkerFinished)
     async def worker_finished(self, message: WorkerFinished) -> None:
@@ -336,7 +463,6 @@ class ClocTUI(App[None]):
 
 
 # This is for seeing the raw JSON output in the console
-# Useful for debugging or testing the CLOC command
 if __name__ == "__main__":
 
     timeout = 15
