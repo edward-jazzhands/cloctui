@@ -1,7 +1,84 @@
-Horizontal { align: center middle; height: auto; }
-SpinnerWidget { width: auto; height: 1; }
+/* loading screen */
+#spinner_container {
+    align: center middle; 
+    &.fullscreen { height: 1fr; }
+    &.inline { height: auto; }
+}
+SpinnerWidget { 
+    height: 1;
+    width: auto; 
+}
 
-TableScreen { overflow-x: hidden; overflow-y: hidden;}
+/* Error screen */
+#error_container {
+    align: center middle; 
+    height: auto;
+    background: transparent;
+}
 
-#footer { dock: bottom; height: auto; }
-#footer_static { margin: 1 0 0 0; }
+/* main screen */
+TableScreen { 
+    overflow-x: hidden; 
+    overflow-y: hidden;
+}
+CustomDataTable { 
+    width: 1fr; 
+    overflow-x: hidden;
+    & > .datatable--cursor {
+        background: $surface;
+    }
+    & > .datatable--header-cursor {
+        background: $panel;
+        # color: $default;  
+    }    
+    & > .datatable--header-hover {
+        background: $panel-lighten-1;
+    }
+    & > .datatable--hover {
+        background: $surface;
+    }    
+}
+SummaryBar { 
+    height: 1; 
+    background: $panel-darken-1; 
+    #sum_label {
+        width: 1fr; 
+        text-align: right; 
+    }
+    #sum_filler { width: 1fr; }    
+}
+
+OptionsBar { 
+    height: 3;
+    width: auto;
+    # background: red;
+    align: center middle;
+    #options_buttons_container {
+        width: auto;
+        border: heavy $primary 30%;
+        .options_button { 
+            &:focus {
+                background: $primary 40%;
+                text-style: none;
+            }
+            &:hover {
+                background: $accent 20%;
+            }
+        }
+    }
+    #options_input {
+        width: 1fr; 
+        height: 3;
+        background: transparent;
+        border: heavy $primary 30%;
+        # text-style: none;
+        # padding: 0 1;
+    }
+}
+
+#footer_static { 
+    height: 1; 
+    padding: 0 1; 
+    background: $panel;
+}
+#quit_message { margin: 1 0 0 0; }

@@ -1,6 +1,6 @@
 [project]
 name = "cloctui"
-version = "0.1.0"
+version = "0.2.0"
 description = "A TUI interface for the CLOC code analysis tool, using the Textual framework."
 readme = "README.md"
 authors = [
@@ -22,7 +22,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.8",
-    "textual>=3.7.1",
+    "textual>=4.0.0",
 ]
 
 [project.scripts]
