@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import TypedDict, Union, cast, Any
 import subprocess
 import os
-import shutil
 import json
 from enum import Enum
 
@@ -19,11 +18,11 @@ from enum import Enum
 # from textual import getters
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.widgets import Static, DataTable
+from textual.widgets import Static, DataTable, Button, Input
 from textual.widgets.data_table import ColumnKey, Column
 from textual.screen import Screen
 from textual.message import Message
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal  # , Vertical
 from textual.binding import Binding
 from rich.text import Text
 
@@ -151,23 +150,7 @@ class CLOC:
             raise CLOCException(message, error.returncode)
 
 
-class CLOCNotInstalledScreen(Screen[None]):
-    """Screen to display when CLOC is not installed."""
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="error_container"):
-            yield Static(
-                "[bold red]CLOC is not installed on your system.[/bold red]\n"
-                "Please install CLOC to use this application.\n"
-                "Visit https://github.com/AlDanial/cloc for installation instructions."
-            )
-
-    def on_mount(self):
-        self.app.exit()
-
-
 class CustomDataTable(DataTable[Any]):
-
 
     class UpdateSummarySize(Message):
         def __init__(self, size: int):
@@ -175,14 +158,16 @@ class CustomDataTable(DataTable[Any]):
             self.size = size
             "The new size for the summary row's first column."
 
+    class TableWorkerFinished(Message):
+        pass
 
     class SortingStatus(Enum):
         UNSORTED = 0  #     [-] unsorted
         ASCENDING = 1  #    [↑] ascending (reverse = True)
-        DESCENDING = 2  #   [↓] descending (reverse = False)    
+        DESCENDING = 2  #   [↓] descending (reverse = False)
 
     COL_SIZES = {
-        "path": 15, # dynamic column minimum
+        "path": 15,  # dynamic column minimum
         "language": 14,
         "blank": 7,
         "comment": 9,
@@ -192,28 +177,48 @@ class CustomDataTable(DataTable[Any]):
     other_cols_total = sum(COL_SIZES.values()) - COL_SIZES["path"]
 
     sort_status: dict[str, SortingStatus] = {
-        "path": SortingStatus.UNSORTED, 
-        "language": SortingStatus.UNSORTED, 
-        "blank": SortingStatus.UNSORTED, 
+        "path": SortingStatus.UNSORTED,
+        "language": SortingStatus.UNSORTED,
+        "blank": SortingStatus.UNSORTED,
         "comment": SortingStatus.UNSORTED,
         "code": SortingStatus.UNSORTED,
         "total": SortingStatus.UNSORTED,
     }
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    can_focus = False
 
-        self.add_column("path [yellow]-[/]", width=self.COL_SIZES['path'], key="path")
-        self.add_column("language [yellow]-[/]", width=self.COL_SIZES['language'], key="language")
-        self.add_column("blank [yellow]-[/]", width=self.COL_SIZES['blank'], key="blank")
-        self.add_column("comment [yellow]-[/]", width=self.COL_SIZES['comment'], key="comment")
-        self.add_column("code [yellow]-[/]", width=self.COL_SIZES['code'], key="code")
-        self.add_column("total [yellow]-[/]", width=self.COL_SIZES['total'], key="total")        
+    def __init__(self, file_data: dict[str, ClocFileStats]) -> None:
+        super().__init__(
+            zebra_stripes=True,
+            show_cursor=False,
+            # cursor_type="column",
+        )
+        self.file_data = file_data
+
+        self.add_column("path [yellow]-[/]", width=self.COL_SIZES["path"], key="path")
+        self.add_column("language [yellow]-[/]", width=self.COL_SIZES["language"], key="language")
+        self.add_column("blank [yellow]-[/]", width=self.COL_SIZES["blank"], key="blank")
+        self.add_column("comment [yellow]-[/]", width=self.COL_SIZES["comment"], key="comment")
+        self.add_column("code [yellow]-[/]", width=self.COL_SIZES["code"], key="code")
+        self.add_column("total [yellow]-[/]", width=self.COL_SIZES["total"], key="total")
+
+    def on_mount(self) -> None:
+        self.update_table(self.file_data)
+        self.group_the_data(self.file_data)
+
+        # OR
+        # self.start_workers()
+
+    # @work(description="Starting processing workers")
+    # async def start_workers(self) -> None:
+    #     self.update_table(self.file_data)
+    #     group_worker = self.group_the_data(self.file_data)
+    #     await group_worker.wait()
 
     def on_resize(self) -> None:
 
         # Account for padding on both sides of each column:
-        total_cell_padding = (self.cell_padding*2) * len(self.columns)
+        total_cell_padding = (self.cell_padding * 2) * len(self.columns)
 
         # Pretty obvious how this works I think:
         first_col_width = self.size.width - self.other_cols_total - total_cell_padding
@@ -224,17 +229,14 @@ class CustomDataTable(DataTable[Any]):
 
         self.columns[ColumnKey("path")].width = first_col_width
         self.refresh()
-        self.post_message(
-            CustomDataTable.UpdateSummarySize(size=first_col_width+3)
-        )
+        self.post_message(CustomDataTable.UpdateSummarySize(size=first_col_width + 3))
 
     @on(DataTable.HeaderSelected)
     def header_selected(self, event: DataTable.HeaderSelected) -> None:
-              
+
         column = self.columns[event.column_key]
         self.sort_column(column, column.key)
 
-    
     def sort_column(self, column: Column, column_key: ColumnKey) -> None:
 
         if column_key.value is None:
@@ -272,13 +274,13 @@ class CustomDataTable(DataTable[Any]):
             column.label = Text.from_markup(f"{value} [yellow]↑[/]")
         else:
             raise ValueError(
-                f"Sort status for {value} is '{self.sort_status[value]}' "
-                "did not meet any expected values."
+                f"Sort status for {value} is '{self.sort_status[value]}' " "did not meet any expected values."
             )
-        
+
     @work(description="Updating table with CLOC data")
     async def update_table(self, file_data: dict[str, ClocFileStats]) -> None:
 
+        self.clear()
         for key, data in file_data.items():
             self.add_row(
                 key,
@@ -289,8 +291,62 @@ class CustomDataTable(DataTable[Any]):
                 data["blank"] + data["comment"] + data["code"],
             )
 
+        self.post_message(CustomDataTable.TableWorkerFinished())
+
+    @work(description="Grouping data by language and directory")
+    async def group_the_data(self, file_data: dict[str, ClocFileStats]) -> None:
+
+        files_by_language: dict[str, ClocFileStats] = {}
+        files_by_dir: dict[str, ClocFileStats] = {}
+
+        for key, data in file_data.items():
+            # Group by language
+            if data["language"] not in files_by_language:
+                files_by_language[data["language"]] = {
+                    "blank": 0,
+                    "comment": 0,
+                    "code": 0,
+                    "language": data["language"],
+                }
+            files_by_language[data["language"]]["blank"] += data["blank"]
+            files_by_language[data["language"]]["comment"] += data["comment"]
+            files_by_language[data["language"]]["code"] += data["code"]
+
+            # Group by directory
+            dir_name = os.path.dirname(key)
+            if dir_name not in files_by_dir:
+                files_by_dir[dir_name] = {
+                    "blank": 0,
+                    "comment": 0,
+                    "code": 0,
+                    "language": dir_name,
+                }
+            files_by_dir[dir_name]["blank"] += data["blank"]
+            files_by_dir[dir_name]["comment"] += data["comment"]
+            files_by_dir[dir_name]["code"] += data["code"]
+
+        self.files_by_language = files_by_language
+        self.files_by_dir = files_by_dir
+
+    def no_group(self) -> None:
+        self.update_table(self.file_data)
+
+    def group_by_lang(self) -> None:
+        self.update_table(self.files_by_language)
+
+    def group_by_dir(self) -> None:
+        self.update_table(self.files_by_dir)
+
 
 class HeaderBar(Static):
+
+    def __init__(self, header_data: ClocHeader) -> None:
+        """Initializes the HeaderBar with CLOC version and elapsed time."""
+        super().__init__()
+        self.header_data = header_data
+
+    def on_mount(self) -> None:
+        self.update_header(self.header_data)
 
     @work(description="Updating header with CLOC version and elapsed time")
     async def update_header(self, header_data: ClocHeader) -> None:
@@ -299,12 +355,17 @@ class HeaderBar(Static):
             f"Running on CLOC v{header_data['cloc_version']}\n"
             f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec | "
             f"Files counted: {header_data['n_files']} | "
-            f"Lines counted: {header_data['n_lines']}"
+            f"Lines counted: {header_data['n_lines']}\n"
         )
 
 
 class SummaryBar(Horizontal):
     """A horizontal bar to display summary statistics."""
+
+    def __init__(self, summary_data: ClocSummaryStats) -> None:
+        """Initializes the SummaryBar with CLOC summary statistics."""
+        super().__init__()
+        self.summary_data = summary_data
 
     def compose(self) -> ComposeResult:
         """Compose the summary bar with static text."""
@@ -319,30 +380,59 @@ class SummaryBar(Horizontal):
     def on_mount(self) -> None:
         # The +2s here are all to account for the padding on both sides of each column.
         # I dont set sum_label because it has a width of 1fr in Textual.
+
+        # I didn't use CSS for this because I want the COL_SIZES dictionary to be
+        # the one source of truth for the column widths.
         self.query_one("#sum_files").styles.width = CustomDataTable.COL_SIZES["language"] + 2
         self.query_one("#sum_blank").styles.width = CustomDataTable.COL_SIZES["blank"] + 2
         self.query_one("#sum_comment").styles.width = CustomDataTable.COL_SIZES["comment"] + 2
         self.query_one("#sum_code").styles.width = CustomDataTable.COL_SIZES["code"] + 2
         self.query_one("#sum_total").styles.width = CustomDataTable.COL_SIZES["total"] + 2
 
+        self.update_summary(self.summary_data)
+
     @work(description="Updating summary statistics")
     async def update_summary(self, summary_data: ClocSummaryStats) -> None:
 
-        self.query_one("#sum_files", Static).update(
-            f"{summary_data['nFiles']} files"
-        )
-        self.query_one("#sum_blank", Static).update(
-            f"{summary_data['blank']}"
-        )
-        self.query_one("#sum_comment", Static).update(
-            f"{summary_data['comment']}"
-        )
-        self.query_one("#sum_code", Static).update(
-            f"{summary_data['code']}"
-        )
+        self.query_one("#sum_files", Static).update(f"{summary_data['nFiles']} files")
+        self.query_one("#sum_blank", Static).update(f"{summary_data['blank']}")
+        self.query_one("#sum_comment", Static).update(f"{summary_data['comment']}")
+        self.query_one("#sum_code", Static).update(f"{summary_data['code']}")
         self.query_one("#sum_total", Static).update(
             f"{summary_data['blank'] + summary_data['comment'] + summary_data['code']}"
         )
+
+
+class OptionsBar(Horizontal):
+    """A horizontal bar to display options or instructions."""
+
+    class GroupByLang(Message):
+        pass
+
+    class GroupByDir(Message):
+        pass
+
+    class NoGroup(Message):
+        pass
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="options_buttons_container"):
+            yield Button("Show files", id="button_no_group", classes="options_button", compact=True)
+            yield Button("Group by language", id="button_lang", classes="options_button", compact=True)
+            yield Button("Group by dir", id="button_dir", classes="options_button", compact=True)
+        yield Input(placeholder="Filter by path", id="options_input")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+
+        if event.button.id == "button_lang":
+            self.post_message(OptionsBar.GroupByLang())
+        elif event.button.id == "button_dir":
+            self.post_message(OptionsBar.GroupByDir())
+        elif event.button.id == "button_no_group":
+            self.post_message(OptionsBar.NoGroup())
 
 
 class TableScreen(Screen[None]):
@@ -360,41 +450,50 @@ class TableScreen(Screen[None]):
         """Initializes the TableScreen with the CLOC JSON result."""
         super().__init__()
         self.header_data = worker_result.header_data
-        self.summary_data = worker_result.summary_data
         self.file_data = worker_result.files_data
+        self.summary_data = worker_result.summary_data
 
     def compose(self) -> ComposeResult:
 
-        yield HeaderBar()
-        yield CustomDataTable()
-        yield SummaryBar()
-        yield Static("[dim yellow]1-6[/] to sort columns", id="footer_static")
+        yield HeaderBar(self.header_data)
+        yield OptionsBar()
+        self.table = CustomDataTable(self.file_data)
+        yield self.table
+        self.summary_bar = SummaryBar(self.summary_data)
+        yield self.summary_bar
+        yield Static(
+            "[dim yellow]1-6[/] Sort columns | "
+            "[dim yellow]Tab[/] Cycle focus | "
+            "[dim yellow]Mouse[/] Supported",
+            id="footer_static",
+        )
         yield Static("[italic]Press ctrl+q to exit", id="quit_message")
-
-    async def on_mount(self) -> None:
-        
-        header = self.query_one(HeaderBar)  #       the first two can be started in parallel
-        header.update_header(self.header_data)
-
-        summary = self.query_one(SummaryBar)
-        summary.update_summary(self.summary_data)
-
-        table = self.query_one(CustomDataTable)  #          the last one we must wait for
-        table_worker = table.update_table(self.file_data)   # in order for sorting to work correctly
-        await table_worker.wait()
-
-        await self.run_action("sort_column('total')")
 
     @on(CustomDataTable.UpdateSummarySize)
     def update_summary_size(self, message: CustomDataTable.UpdateSummarySize) -> None:
         "Adjust first column of summary row when table is resized."
-        self.query_one("#sum_label", Static).styles.width = message.size
+        self.summary_bar.query_one("#sum_label", Static).styles.width = message.size
+
+    @on(CustomDataTable.TableWorkerFinished)
+    async def table_worker_finished(self) -> None:
+        await self.run_action("sort_column('total')")
 
     def action_sort_column(self, column_key: str) -> None:
-        table = self.query_one(CustomDataTable)
-        column = table.columns[ColumnKey(column_key)]
-        table.sort_column(column, column.key)
-        
+        column = self.table.columns[ColumnKey(column_key)]
+        self.table.sort_column(column, column.key)
+
+    @on(OptionsBar.GroupByLang)
+    def group_by_lang(self) -> None:
+        self.table.group_by_lang()
+
+    @on(OptionsBar.GroupByDir)
+    def group_by_dir(self) -> None:
+        self.table.group_by_dir()
+
+    @on(OptionsBar.NoGroup)
+    def no_group(self) -> None:
+        self.table.no_group()
+
 
 class ClocTUI(App[None]):
 
@@ -405,10 +504,10 @@ class ClocTUI(App[None]):
 
     class WorkerFinished(Message):
         def __init__(
-                self,
-                header_data: ClocHeader,
-                summary_data: ClocSummaryStats,
-                files_data: dict[str, ClocFileStats],
+            self,
+            header_data: ClocHeader,
+            summary_data: ClocSummaryStats,
+            files_data: dict[str, ClocFileStats],
         ) -> None:
             super().__init__()
             self.header_data = header_data
@@ -431,21 +530,14 @@ class ClocTUI(App[None]):
             yield SpinnerWidget(spinner_type="simpleDotsScrolling")
 
     def on_mount(self) -> None:
-        if self._driver and self._driver.is_inline:
+        if self.is_inline:
             self.query_one("#spinner_container").add_class("inline")
         else:
             self.query_one("#spinner_container").add_class("fullscreen")
 
     def on_ready(self) -> None:
 
-        if not self.check_cloc_installed():
-            self.push_screen(CLOCNotInstalledScreen())
-            return
-        self.run_worker(
-            self.execute_cloc,
-            description="Executing CLOC process",
-            thread=True
-        )
+        self.run_worker(self.execute_cloc, description="Executing CLOC process", thread=True)
 
     def execute_cloc(self) -> None:
         """Executes the CLOC command and returns the parsed JSON result."""
@@ -463,7 +555,7 @@ class ClocTUI(App[None]):
             output = cloc.execute()
         except CLOCException as e:
             raise e
-        
+
         result: ClocJsonResult = json.loads(output)
         header_data: ClocHeader = cast(ClocHeader, result["header"])
         summary_data: ClocSummaryStats = cast(ClocSummaryStats, result["SUM"])
@@ -476,31 +568,10 @@ class ClocTUI(App[None]):
                 files_data[key] = cast(ClocFileStats, value)
 
         self.post_message(
-            ClocTUI.WorkerFinished(
-                header_data=header_data, summary_data=summary_data, files_data=files_data
-            )
+            ClocTUI.WorkerFinished(header_data=header_data, summary_data=summary_data, files_data=files_data)
         )
 
     @on(WorkerFinished)
     async def worker_finished(self, message: WorkerFinished) -> None:
 
         await self.push_screen(TableScreen(message))
-
-
-    def check_cloc_installed(self) -> bool:
-        """Checks if CLOC is installed on the system."""
-        try:
-            # Use shutil.which to check if cloc is in PATH
-            if shutil.which("cloc") is None:
-                return False
-            # Verify cloc can be executed
-            subprocess.run(
-                ["cloc", "--version"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False

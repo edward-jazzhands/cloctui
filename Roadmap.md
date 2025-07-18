@@ -1,9 +1,11 @@
 # CLOCTUI Roadmap
 
-[ ] Add option to group by language
-[ ] Add option to group by folder
 [ ] Add option to filter files by name
 [ ] Add unit tests
+[X] Add option to group by language
+[X] Add option to group by folder
 [X] Add Click CLI
 [X] Make header clickable for sorting
 [X] Add keyboard shortcuts for sorting
+[X] Add checking for CLOC installation and nice error message
+[X] Add inline / fullscreen argument to CLI
