@@ -17,7 +17,7 @@ from enum import Enum
 
 # Textual imports
 # from textual import getters
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.widgets import Static, DataTable
 from textual.widgets.data_table import ColumnKey, Column
@@ -75,24 +75,6 @@ class CLOC:
         self.flags: list[str] = []
         self.arguments: list[str] = []
         self.working_directory = os.getcwd()
-
-    def check_cloc_installed(self) -> bool:
-        """Checks if CLOC is installed on the system."""
-        try:
-            # Use shutil.which to check if cloc is in PATH
-            if shutil.which("cloc") is None:
-                return False
-            # Verify cloc can be executed
-            subprocess.run(
-                ["cloc", "--version"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
 
     def add_option(self, option: str, value: int) -> CLOC:
         """Adds an option with a value (e.g., --output file.txt).
@@ -229,7 +211,7 @@ class CustomDataTable(DataTable[Any]):
         self.add_column("total [yellow]-[/]", width=self.COL_SIZES['total'], key="total")        
 
     def on_resize(self) -> None:
-        
+
         # Account for padding on both sides of each column:
         total_cell_padding = (self.cell_padding*2) * len(self.columns)
 
@@ -293,6 +275,32 @@ class CustomDataTable(DataTable[Any]):
                 f"Sort status for {value} is '{self.sort_status[value]}' "
                 "did not meet any expected values."
             )
+        
+    @work(description="Updating table with CLOC data")
+    async def update_table(self, file_data: dict[str, ClocFileStats]) -> None:
+
+        for key, data in file_data.items():
+            self.add_row(
+                key,
+                data["language"],
+                data["blank"],
+                data["comment"],
+                data["code"],
+                data["blank"] + data["comment"] + data["code"],
+            )
+
+
+class HeaderBar(Static):
+
+    @work(description="Updating header with CLOC version and elapsed time")
+    async def update_header(self, header_data: ClocHeader) -> None:
+        """Updates the header with CLOC version and elapsed time."""
+        self.update(
+            f"Running on CLOC v{header_data['cloc_version']}\n"
+            f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec | "
+            f"Files counted: {header_data['n_files']} | "
+            f"Lines counted: {header_data['n_lines']}"
+        )
 
 
 class SummaryBar(Horizontal):
@@ -310,14 +318,15 @@ class SummaryBar(Horizontal):
 
     def on_mount(self) -> None:
         # The +2s here are all to account for the padding on both sides of each column.
-        self.query_one("#sum_label").styles.width = CustomDataTable.COL_SIZES["path"] + 2
+        # I dont set sum_label because it has a width of 1fr in Textual.
         self.query_one("#sum_files").styles.width = CustomDataTable.COL_SIZES["language"] + 2
         self.query_one("#sum_blank").styles.width = CustomDataTable.COL_SIZES["blank"] + 2
         self.query_one("#sum_comment").styles.width = CustomDataTable.COL_SIZES["comment"] + 2
         self.query_one("#sum_code").styles.width = CustomDataTable.COL_SIZES["code"] + 2
         self.query_one("#sum_total").styles.width = CustomDataTable.COL_SIZES["total"] + 2
 
-    def update_summary(self, summary_data: ClocSummaryStats) -> None:
+    @work(description="Updating summary statistics")
+    async def update_summary(self, summary_data: ClocSummaryStats) -> None:
 
         self.query_one("#sum_files", Static).update(
             f"{summary_data['nFiles']} files"
@@ -347,14 +356,16 @@ class TableScreen(Screen[None]):
         Binding("6", "sort_column('total')", "Total"),
     ]
 
-    def __init__(self, result: ClocJsonResult):
+    def __init__(self, worker_result: ClocTUI.WorkerFinished):
         """Initializes the TableScreen with the CLOC JSON result."""
         super().__init__()
-        self.result = result
+        self.header_data = worker_result.header_data
+        self.summary_data = worker_result.summary_data
+        self.file_data = worker_result.files_data
 
     def compose(self) -> ComposeResult:
 
-        yield Static(id="header_static")
+        yield HeaderBar()
         yield CustomDataTable()
         yield SummaryBar()
         yield Static("[dim yellow]1-6[/] to sort columns", id="footer_static")
@@ -362,31 +373,15 @@ class TableScreen(Screen[None]):
 
     async def on_mount(self) -> None:
         
-        table = self.query_one(CustomDataTable)
-        header = self.query_one("#header_static", Static)
-        summary = self.query_one(SummaryBar)
+        header = self.query_one(HeaderBar)  #       the first two can be started in parallel
+        header.update_header(self.header_data)
 
-        for key, value in self.result.items():
-            if key == "header":
-                header_data: ClocHeader = cast(ClocHeader, value)
-                header.update(
-                    f"Running on CLOC v{header_data['cloc_version']}\n"
-                    f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec | "
-                    f"Files counted: {header_data['n_files']} | Lines counted: {header_data['n_lines']}"
-                )
-            elif key == "SUM":
-                summary_data: ClocSummaryStats = cast(ClocSummaryStats, value)
-                summary.update_summary(summary_data)
-            else:
-                file_stats: ClocFileStats = cast(ClocFileStats, value)
-                table.add_row(
-                    key,  # This is the file path
-                    file_stats["language"],
-                    file_stats["blank"],
-                    file_stats["comment"],
-                    file_stats["code"],
-                    file_stats["blank"] + file_stats["comment"] + file_stats["code"],
-                )
+        summary = self.query_one(SummaryBar)
+        summary.update_summary(self.summary_data)
+
+        table = self.query_one(CustomDataTable)  #          the last one we must wait for
+        table_worker = table.update_table(self.file_data)   # in order for sorting to work correctly
+        await table_worker.wait()
 
         await self.run_action("sort_column('total')")
 
@@ -409,9 +404,16 @@ class ClocTUI(App[None]):
     working_directory = "./"  #! should this be same as dir_to_scan?
 
     class WorkerFinished(Message):
-        def __init__(self, result: ClocJsonResult):
+        def __init__(
+                self,
+                header_data: ClocHeader,
+                summary_data: ClocSummaryStats,
+                files_data: dict[str, ClocFileStats],
+        ) -> None:
             super().__init__()
-            self.result = result
+            self.header_data = header_data
+            self.summary_data = summary_data
+            self.files_data = files_data
 
     def __init__(self, dir_to_scan: str) -> None:
         """Initializes the ClocTUI application.
@@ -424,12 +426,26 @@ class ClocTUI(App[None]):
 
     def compose(self) -> ComposeResult:
 
-        with Horizontal():
+        with Horizontal(id="spinner_container"):
             yield SpinnerWidget(text="Counting Lines of Code", spinner_type="line")
             yield SpinnerWidget(spinner_type="simpleDotsScrolling")
 
+    def on_mount(self) -> None:
+        if self._driver and self._driver.is_inline:
+            self.query_one("#spinner_container").add_class("inline")
+        else:
+            self.query_one("#spinner_container").add_class("fullscreen")
+
     def on_ready(self) -> None:
-        self.run_worker(self.execute_cloc, thread=True)
+
+        if not self.check_cloc_installed():
+            self.push_screen(CLOCNotInstalledScreen())
+            return
+        self.run_worker(
+            self.execute_cloc,
+            description="Executing CLOC process",
+            thread=True
+        )
 
     def execute_cloc(self) -> None:
         """Executes the CLOC command and returns the parsed JSON result."""
@@ -442,40 +458,49 @@ class ClocTUI(App[None]):
             .set_working_directory(self.working_directory)
             .add_argument(self.dir_to_scan)
         )
-        
-        # Check if CLOC is installed before attempting to execute
-        if not cloc.check_cloc_installed():
-            self.push_screen(CLOCNotInstalledScreen())
-            return
 
         try:
             output = cloc.execute()
         except CLOCException as e:
             raise e
-
+        
         result: ClocJsonResult = json.loads(output)
-        self.post_message(ClocTUI.WorkerFinished(result=result))
+        header_data: ClocHeader = cast(ClocHeader, result["header"])
+        summary_data: ClocSummaryStats = cast(ClocSummaryStats, result["SUM"])
+        files_data: dict[str, ClocFileStats] = {}
+
+        for key, value in result.items():
+            if key in ["header", "SUM"]:
+                continue
+            else:
+                files_data[key] = cast(ClocFileStats, value)
+
+        self.post_message(
+            ClocTUI.WorkerFinished(
+                header_data=header_data, summary_data=summary_data, files_data=files_data
+            )
+        )
 
     @on(WorkerFinished)
     async def worker_finished(self, message: WorkerFinished) -> None:
-        self.log.info("CLOC command finished successfully.")
-        await self.push_screen(TableScreen(message.result))
+
+        await self.push_screen(TableScreen(message))
 
 
-# This is for seeing the raw JSON output in the console
-if __name__ == "__main__":
-
-    timeout = 15
-    working_directory = "./"
-    dir_to_scan = "src"
-
-    result: ClocJsonResult = json.loads(
-        CLOC()
-        .add_flag("--by-file")
-        .add_flag("--json")
-        .add_option("--timeout", timeout)
-        .set_working_directory(working_directory)
-        .add_argument(dir_to_scan)
-        .execute()
-    )
-    print(json.dumps(result, indent=4))
+    def check_cloc_installed(self) -> bool:
+        """Checks if CLOC is installed on the system."""
+        try:
+            # Use shutil.which to check if cloc is in PATH
+            if shutil.which("cloc") is None:
+                return False
+            # Verify cloc can be executed
+            subprocess.run(
+                ["cloc", "--version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False

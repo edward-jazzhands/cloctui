@@ -7,8 +7,8 @@ run path:
 	uv run cloctui {{path}}
 
 # Run the demo in dev mode
-run-dev:
-	uv run textual run --dev cloctui.main:ClocTUI
+run-dev path:
+	uv run textual run --dev src/cloctui/__main__.py {{path}}
 
 # Run the console
 console:
