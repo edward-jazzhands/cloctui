@@ -274,8 +274,7 @@ class CustomDataTable(DataTable[Any]):
                 )
             )
         else:
-            first_col.auto_width = True  #!      not sure this does anything
-            self.notify("Column Set to Auto")
+            first_col.auto_width = True
             self.post_message(
                 CustomDataTable.UpdateSummarySize(
                     size=first_col.content_width + 2,
