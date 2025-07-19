@@ -9,54 +9,51 @@ SpinnerWidget {
     width: auto; 
 }
 
-/* Error screen */
-#error_container {
-    align: center middle; 
-    height: auto;
-    background: transparent;
-}
-
 /* main screen */
+
 TableScreen { 
     overflow-x: hidden; 
     overflow-y: hidden;
+    #header_container {
+        height: 6;
+        margin: 0 1;
+        & > HeaderBar { height: 3; }
+    }
+    #table_container {
+        margin: 0 1;
+        height: auto;
+    }
+    #bottom_container {
+        margin: 0 1;
+        height: 4;
+    }     
 }
+
 CustomDataTable { 
-    width: 1fr; 
+    max-height: 27;
     overflow-x: hidden;
-    & > .datatable--cursor {
-        background: $surface;
-    }
-    & > .datatable--header-cursor {
-        background: $panel;
-        # color: $default;  
-    }    
-    & > .datatable--header-hover {
-        background: $panel-lighten-1;
-    }
-    & > .datatable--hover {
-        background: $surface;
-    }    
+    & > .datatable--cursor { background: $surface; }
+    & > .datatable--header-cursor { background: $panel; }    
+    & > .datatable--header-hover { background: $panel-lighten-1; }
+    & > .datatable--hover { background: $surface; }  
 }
 SummaryBar { 
     height: 1; 
     background: $panel-darken-1; 
-    #sum_label {
-        width: 1fr; 
-        text-align: right; 
-    }
-    #sum_filler { width: 1fr; }    
+    #sum_label, #sum_filler { width: 1fr; }
+    .sum_cell { padding: 0 1; }  
 }
 
 OptionsBar { 
     height: 3;
     width: auto;
-    # background: red;
     align: center middle;
     #options_buttons_container {
         width: auto;
-        border: heavy $primary 30%;
-        .options_button { 
+        align: center middle;
+        keyline: heavy $primary 40%;
+        & > Button {
+            margin: 0 1; 
             &:focus {
                 background: $primary 40%;
                 text-style: none;
@@ -66,13 +63,12 @@ OptionsBar {
             }
         }
     }
+
     #options_input {
         width: 1fr; 
         height: 3;
         background: transparent;
         border: heavy $primary 30%;
-        # text-style: none;
-        # padding: 0 1;
     }
 }
 
@@ -81,4 +77,17 @@ OptionsBar {
     padding: 0 1; 
     background: $panel;
 }
-#quit_message { margin: 1 0 0 0; }
+#quit_message { margin: 0 0 0 0; }
+#quit_buttons_container {
+    margin: 1 0 0 0;
+    #quit_button, #quit_no_clear {
+        margin: 0 1;
+        &:focus {
+            background: $primary 40%;
+            text-style: none;
+        }
+        &:hover {
+            background: $accent 20%;
+        }        
+    }
+}

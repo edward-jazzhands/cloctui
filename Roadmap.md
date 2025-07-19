@@ -2,6 +2,7 @@
 
 [ ] Add option to filter files by name
 [ ] Add unit tests
+[X] Add button to quit without clearing screen
 [X] Add option to group by language
 [X] Add option to group by folder
 [X] Add Click CLI

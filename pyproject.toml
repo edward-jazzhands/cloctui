@@ -1,6 +1,6 @@
 [project]
 name = "cloctui"
-version = "0.2.0"
+version = "0.2.1"
 description = "A TUI interface for the CLOC code analysis tool, using the Textual framework."
 readme = "README.md"
 authors = [

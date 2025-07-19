@@ -63,7 +63,7 @@ def cli(path: str | None, fullscreen: bool = False) -> None:
             from cloctui.main import ClocTUI
 
             inline = not fullscreen
-            ClocTUI(path).run(inline=inline)
+            ClocTUI(path).run(inline=inline, inline_no_clear=True)
 
 
 def run() -> None:
