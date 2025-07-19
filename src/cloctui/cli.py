@@ -41,29 +41,30 @@ scoop install cloc               # Windows with Scoop
 def cli(path: str | None, fullscreen: bool = False) -> None:
     """CLI for CLOCTUI"""
 
+    # Use shutil.which to check if cloc is in PATH
+    if shutil.which("cloc") is None:
+        click.echo(error_message)
+        return
+
+    try:
+        subprocess.run(
+            ["cloc", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        click.echo(error_message)
+        return
+
     # If no main argument is provided, scan current directory.
     if path is None:
         click.echo("No path provided")
+        return
 
     else:
 
-        # Use shutil.which to check if cloc is in PATH
-        if shutil.which("cloc") is None:
-            click.echo(error_message)
-            return
+        from cloctui.main import ClocTUI
 
-        try:
-            subprocess.run(
-                ["cloc", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            click.echo(error_message)
-            return
-        else:
-            from cloctui.main import ClocTUI
-
-            inline = not fullscreen
-            ClocTUI(path).run(inline=inline, inline_no_clear=True)
+        inline = not fullscreen
+        ClocTUI(path).run(inline=inline, inline_no_clear=True)
 
 
 def run() -> None:
