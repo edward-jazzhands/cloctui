@@ -12,17 +12,17 @@ from typing import TypedDict, Union, cast, Any
 import subprocess
 import os
 import json
+from pathlib import Path
 from enum import Enum
 
 # Textual imports
-# from textual import getters
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.widgets import Static, DataTable, Button, Input
+from textual.widgets import Static, DataTable, Button  # , Input
 from textual.widgets.data_table import ColumnKey, Column
 from textual.screen import Screen
 from textual.message import Message
-from textual.containers import Horizontal  # , Vertical
+from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from rich.text import Text
 
@@ -62,6 +62,16 @@ class ClocHeader(TypedDict):
 
 
 ClocJsonResult = dict[str, Union[ClocFileStats, ClocSummaryStats, ClocHeader]]
+
+
+class SortableText(Text):
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.plain < other
+        if isinstance(other, Text):
+            return self.plain < other.plain
+        return NotImplemented
 
 
 # This class courtesey of Stefano Stone
@@ -153,10 +163,11 @@ class CLOC:
 class CustomDataTable(DataTable[Any]):
 
     class UpdateSummarySize(Message):
-        def __init__(self, size: int):
+        def __init__(self, size: int, update_mode: CustomDataTable.UpdateMode) -> None:
             super().__init__()
             self.size = size
             "The new size for the summary row's first column."
+            self.update_mode = update_mode
 
     class TableWorkerFinished(Message):
         pass
@@ -166,26 +177,31 @@ class CustomDataTable(DataTable[Any]):
         ASCENDING = 1  #    [↑] ascending (reverse = True)
         DESCENDING = 2  #   [↓] descending (reverse = False)
 
+    class UpdateMode(Enum):
+        NO_GROUP = 0
+        GROUP_BY_LANG = 1
+        GROUP_BY_DIR = 2
+
     COL_SIZES = {
-        "path": 15,  # dynamic column minimum
+        "path": 25,  # dynamic column minimum
         "language": 14,
         "blank": 7,
         "comment": 9,
         "code": 7,
-        "total": 7,
+        "total": 9,
     }
     other_cols_total = sum(COL_SIZES.values()) - COL_SIZES["path"]
 
-    sort_status: dict[str, SortingStatus] = {
-        "path": SortingStatus.UNSORTED,
-        "language": SortingStatus.UNSORTED,
-        "blank": SortingStatus.UNSORTED,
-        "comment": SortingStatus.UNSORTED,
-        "code": SortingStatus.UNSORTED,
-        "total": SortingStatus.UNSORTED,
-    }
+    # sort_status: dict[str, SortingStatus] = {
+    #     "path": SortingStatus.UNSORTED,
+    #     "language": SortingStatus.UNSORTED,
+    #     "blank": SortingStatus.UNSORTED,
+    #     "comment": SortingStatus.UNSORTED,
+    #     "code": SortingStatus.UNSORTED,
+    #     "total": SortingStatus.UNSORTED,
+    # }
 
-    can_focus = False
+    # can_focus = False
 
     def __init__(self, file_data: dict[str, ClocFileStats]) -> None:
         super().__init__(
@@ -194,8 +210,20 @@ class CustomDataTable(DataTable[Any]):
             # cursor_type="column",
         )
         self.file_data = file_data
+        self.initialized = False
+        self.current_mode: CustomDataTable.UpdateMode = CustomDataTable.UpdateMode.NO_GROUP
 
-        self.add_column("path [yellow]-[/]", width=self.COL_SIZES["path"], key="path")
+    def setup_columns(self) -> None:
+
+        self.sort_status: dict[str, CustomDataTable.SortingStatus] = {
+            "path": CustomDataTable.SortingStatus.UNSORTED,
+            "language": CustomDataTable.SortingStatus.UNSORTED,
+            "blank": CustomDataTable.SortingStatus.UNSORTED,
+            "comment": CustomDataTable.SortingStatus.UNSORTED,
+            "code": CustomDataTable.SortingStatus.UNSORTED,
+            "total": CustomDataTable.SortingStatus.UNSORTED,
+        }
+        self.add_column("path [yellow]-[/]", key="path")
         self.add_column("language [yellow]-[/]", width=self.COL_SIZES["language"], key="language")
         self.add_column("blank [yellow]-[/]", width=self.COL_SIZES["blank"], key="blank")
         self.add_column("comment [yellow]-[/]", width=self.COL_SIZES["comment"], key="comment")
@@ -203,33 +231,69 @@ class CustomDataTable(DataTable[Any]):
         self.add_column("total [yellow]-[/]", width=self.COL_SIZES["total"], key="total")
 
     def on_mount(self) -> None:
-        self.update_table(self.file_data)
-        self.group_the_data(self.file_data)
-
-        # OR
-        # self.start_workers()
-
-    # @work(description="Starting processing workers")
-    # async def start_workers(self) -> None:
-    #     self.update_table(self.file_data)
-    #     group_worker = self.group_the_data(self.file_data)
-    #     await group_worker.wait()
+        self.group_the_data(self.file_data)  # these two workers run in parallel
+        self.update_table(self.file_data, CustomDataTable.UpdateMode.NO_GROUP)
 
     def on_resize(self) -> None:
+        if self.initialized:
+            self.calculate_first_column_size(self.current_mode)
+
+    def calculate_first_column_size(self, update_mode: CustomDataTable.UpdateMode) -> None:
 
         # Account for padding on both sides of each column:
         total_cell_padding = (self.cell_padding * 2) * len(self.columns)
 
         # Pretty obvious how this works I think:
-        first_col_width = self.size.width - self.other_cols_total - total_cell_padding
+        first_col_max_width = self.size.width - self.other_cols_total - total_cell_padding
 
-        # Prevent column from being smaller than the chosen minimum:
-        if first_col_width < self.COL_SIZES["path"]:
-            first_col_width = self.COL_SIZES["path"]
+        if (
+            update_mode == CustomDataTable.UpdateMode.NO_GROUP
+            or update_mode == CustomDataTable.UpdateMode.GROUP_BY_DIR
+        ):
+            first_col = self.columns[ColumnKey("path")]
+        else:
+            assert update_mode == CustomDataTable.UpdateMode.GROUP_BY_LANG
+            first_col = self.columns[ColumnKey("language")]
 
-        self.columns[ColumnKey("path")].width = first_col_width
+        if first_col.content_width > first_col_max_width:
+            first_col.auto_width = False
+            first_col.width = first_col_max_width
+            self.post_message(
+                CustomDataTable.UpdateSummarySize(
+                    size=first_col_max_width + 2,
+                    update_mode=update_mode,
+                )
+            )
+        elif first_col.content_width < self.COL_SIZES["path"]:
+            first_col.auto_width = False
+            first_col.width = self.COL_SIZES["path"]
+            self.post_message(
+                CustomDataTable.UpdateSummarySize(
+                    size=self.COL_SIZES["path"] + 2,
+                    update_mode=update_mode,
+                )
+            )
+        else:
+            first_col.auto_width = True  #!      not sure this does anything
+            self.notify("Column Set to Auto")
+            self.post_message(
+                CustomDataTable.UpdateSummarySize(
+                    size=first_col.content_width + 2,
+                    update_mode=update_mode,
+                )
+            )
+
+        self.call_after_refresh(self.custom_refresh)
         self.refresh()
-        self.post_message(CustomDataTable.UpdateSummarySize(size=first_col_width + 3))
+
+    def custom_refresh(self) -> None:
+        self.refresh()
+        focused = self.app.focused
+        self.focus()
+        if focused is not None:
+            self.app.set_focus(focused)
+        if not self.initialized:
+            self.initialized = True
 
     @on(DataTable.HeaderSelected)
     def header_selected(self, event: DataTable.HeaderSelected) -> None:
@@ -246,11 +310,10 @@ class CustomDataTable(DataTable[Any]):
                 f"Unknown column key: {column_key.value}. "
                 "This should never happen, please report this issue."
             )
-
         value = column_key.value
 
         # if its currently unsorted, that means the user is switching columns
-        # to sort. Reset all other columns to unsorted.
+        # to sort. Reset all columns to unsorted.
         if self.sort_status[value] == self.SortingStatus.UNSORTED:
             for key in self.sort_status:
                 self.sort_status[key] = self.SortingStatus.UNSORTED
@@ -274,16 +337,30 @@ class CustomDataTable(DataTable[Any]):
             column.label = Text.from_markup(f"{value} [yellow]↑[/]")
         else:
             raise ValueError(
-                f"Sort status for {value} is '{self.sort_status[value]}' " "did not meet any expected values."
+                f"Sort status for {value} is '{self.sort_status[value]}', did not meet any expected values."
             )
 
     @work(description="Updating table with CLOC data")
-    async def update_table(self, file_data: dict[str, ClocFileStats]) -> None:
+    async def update_table(
+        self,
+        file_data: dict[str, ClocFileStats],
+        update_mode: CustomDataTable.UpdateMode,
+    ) -> None:
 
-        self.clear()
+        self.clear(columns=True)
+        self.setup_columns()  #     this also resets all in self.sort_status
         for key, data in file_data.items():
+
+            path_obj = Path(key)  # path object simplifies the file checking
+            rich_textized = SortableText(key, overflow="ellipsis")
+            if path_obj.is_file():
+                # This will colorize the file extension in yellow, if there is one
+                ext_index = key.rindex(path_obj.suffix) if path_obj.suffix else None
+                if ext_index is not None:
+                    rich_textized.stylize(style="yellow", start=ext_index)
+
             self.add_row(
-                key,
+                rich_textized,
                 data["language"],
                 data["blank"],
                 data["comment"],
@@ -291,6 +368,14 @@ class CustomDataTable(DataTable[Any]):
                 data["blank"] + data["comment"] + data["code"],
             )
 
+        if update_mode == CustomDataTable.UpdateMode.GROUP_BY_LANG:
+            self.remove_column(ColumnKey("path"))
+            self.sort_status.pop("path", None)
+        elif update_mode == CustomDataTable.UpdateMode.GROUP_BY_DIR:
+            self.remove_column(ColumnKey("language"))
+            self.sort_status.pop("language", None)
+
+        self.call_after_refresh(self.calculate_first_column_size, update_mode=update_mode)
         self.post_message(CustomDataTable.TableWorkerFinished())
 
     @work(description="Grouping data by language and directory")
@@ -329,13 +414,16 @@ class CustomDataTable(DataTable[Any]):
         self.files_by_dir = files_by_dir
 
     def no_group(self) -> None:
-        self.update_table(self.file_data)
+        self.update_table(self.file_data, CustomDataTable.UpdateMode.NO_GROUP)
+        self.current_mode = CustomDataTable.UpdateMode.NO_GROUP
 
     def group_by_lang(self) -> None:
-        self.update_table(self.files_by_language)
+        self.update_table(self.files_by_language, CustomDataTable.UpdateMode.GROUP_BY_LANG)
+        self.current_mode = CustomDataTable.UpdateMode.GROUP_BY_LANG
 
     def group_by_dir(self) -> None:
-        self.update_table(self.files_by_dir)
+        self.update_table(self.files_by_dir, CustomDataTable.UpdateMode.GROUP_BY_DIR)
+        self.current_mode = CustomDataTable.UpdateMode.GROUP_BY_DIR
 
 
 class HeaderBar(Static):
@@ -353,8 +441,8 @@ class HeaderBar(Static):
         """Updates the header with CLOC version and elapsed time."""
         self.update(
             f"Running on CLOC v{header_data['cloc_version']}\n"
-            f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec | "
-            f"Files counted: {header_data['n_files']} | "
+            f"Elapsed time: {header_data['elapsed_seconds']:.2f} sec │ "
+            f"Files counted: {header_data['n_files']} │ "
             f"Lines counted: {header_data['n_lines']}\n"
         )
 
@@ -369,13 +457,13 @@ class SummaryBar(Horizontal):
 
     def compose(self) -> ComposeResult:
         """Compose the summary bar with static text."""
-        yield Static("SUM:  ", id="sum_label")
-        yield Static(id="sum_files")
-        yield Static(id="sum_blank")
-        yield Static(id="sum_comment")
-        yield Static(id="sum_code")
-        yield Static(id="sum_total")
-        yield Static(id="sum_filler")
+        yield Static("SUM:  ", id="sum_label", classes="sum_cell")
+        yield Static(id="sum_files", classes="sum_cell")
+        yield Static(id="sum_blank", classes="sum_cell")
+        yield Static(id="sum_comment", classes="sum_cell")
+        yield Static(id="sum_code", classes="sum_cell")
+        yield Static(id="sum_total", classes="sum_cell")
+        yield Static(id="sum_filler", classes="sum_cell")
 
     def on_mount(self) -> None:
         # The +2s here are all to account for the padding on both sides of each column.
@@ -402,6 +490,22 @@ class SummaryBar(Horizontal):
             f"{summary_data['blank'] + summary_data['comment'] + summary_data['code']}"
         )
 
+    def update_size(self, message: CustomDataTable.UpdateSummarySize) -> None:
+        mode = message.update_mode
+        first_col_size = message.size
+        sum_label = self.query_one("#sum_label", Static)
+        files_label = self.query_one("#sum_files", Static)
+        if mode == CustomDataTable.UpdateMode.NO_GROUP:
+            sum_label.display = True
+            sum_label.styles.width = first_col_size
+            files_label.styles.width = CustomDataTable.COL_SIZES["language"] + 2
+        elif (
+            mode == CustomDataTable.UpdateMode.GROUP_BY_LANG
+            or mode == CustomDataTable.UpdateMode.GROUP_BY_DIR
+        ):
+            sum_label.display = False
+            files_label.styles.width = first_col_size
+
 
 class OptionsBar(Horizontal):
     """A horizontal bar to display options or instructions."""
@@ -420,10 +524,12 @@ class OptionsBar(Horizontal):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="options_buttons_container"):
-            yield Button("Show files", id="button_no_group", classes="options_button", compact=True)
-            yield Button("Group by language", id="button_lang", classes="options_button", compact=True)
-            yield Button("Group by dir", id="button_dir", classes="options_button", compact=True)
-        yield Input(placeholder="Filter by path", id="options_input")
+            yield Button("Show files", id="button_no_group", compact=True)
+            yield Button("Group by language", id="button_lang", compact=True)
+            yield Button("Group by dir", id="button_dir", compact=True)
+
+        # ~ FUTURE VERSION PLAN:
+        # yield Input(placeholder="Filter by path", id="options_input")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
 
@@ -438,12 +544,12 @@ class OptionsBar(Horizontal):
 class TableScreen(Screen[None]):
 
     BINDINGS = [
-        Binding("1", "sort_column('path')", "Path"),
-        Binding("2", "sort_column('language')", "Language"),
-        Binding("3", "sort_column('blank')", "Blank Lines"),
-        Binding("4", "sort_column('comment')", "Comment Lines"),
-        Binding("5", "sort_column('code')", "Code Lines"),
-        Binding("6", "sort_column('total')", "Total"),
+        Binding("1", "sort_column(0)", "Sort Column 1"),
+        Binding("2", "sort_column(1)", "Sort Column 2"),
+        Binding("3", "sort_column(2)", "Sort Column 3"),
+        Binding("4", "sort_column(3)", "Sort Column 4"),
+        Binding("5", "sort_column(4)", "Sort Column 5"),
+        Binding("6", "sort_column(5)", "Sort Column 6"),
     ]
 
     def __init__(self, worker_result: ClocTUI.WorkerFinished):
@@ -455,44 +561,80 @@ class TableScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
 
-        yield HeaderBar(self.header_data)
-        yield OptionsBar()
-        self.table = CustomDataTable(self.file_data)
-        yield self.table
-        self.summary_bar = SummaryBar(self.summary_data)
-        yield self.summary_bar
-        yield Static(
-            "[dim yellow]1-6[/] Sort columns | "
-            "[dim yellow]Tab[/] Cycle focus | "
-            "[dim yellow]Mouse[/] Supported",
-            id="footer_static",
-        )
-        yield Static("[italic]Press ctrl+q to exit", id="quit_message")
+        with Vertical(id="header_container"):
+            yield HeaderBar(self.header_data)
+            yield OptionsBar()
+        with Vertical(id="table_container"):
+            self.table = CustomDataTable(self.file_data)
+            yield self.table
+        with Vertical(id="bottom_container"):
+            self.summary_bar = SummaryBar(self.summary_data)
+            yield self.summary_bar
+            yield Static(
+                "[dim yellow]1-6[/] Sort columns │ "
+                "[dim yellow]Tab[/] Cycle focus │ "
+                "[dim yellow]Click[/] Headers to sort │ "
+                "[dim yellow]Ctrl+q[/] Quit",
+                id="footer_static",
+            )
+            with Horizontal(id="quit_buttons_container"):
+                yield Button("Quit", id="quit_button", compact=True)
+                yield Button("Quit without clearing screen", id="quit_no_clear", compact=True)
+            yield Static("[italic]Press ctrl+q to quit", id="quit_message")
 
     @on(CustomDataTable.UpdateSummarySize)
     def update_summary_size(self, message: CustomDataTable.UpdateSummarySize) -> None:
         "Adjust first column of summary row when table is resized."
-        self.summary_bar.query_one("#sum_label", Static).styles.width = message.size
+        self.summary_bar.update_size(message)
 
-    @on(CustomDataTable.TableWorkerFinished)
-    async def table_worker_finished(self) -> None:
-        await self.run_action("sort_column('total')")
+    async def on_mount(self) -> None:
+        await self.run_action("sort_column(5)")
+        self.app.set_focus(self.query_one(OptionsBar).query_one("#button_no_group"))
 
-    def action_sort_column(self, column_key: str) -> None:
-        column = self.table.columns[ColumnKey(column_key)]
-        self.table.sort_column(column, column.key)
+    def action_sort_column(self, column_index: int) -> None:
+
+        try:
+            column = self.table.ordered_columns[column_index]
+        except IndexError:
+            return
+        else:
+            self.table.sort_column(column, column.key)
+
+    def update_footer_static(self, mode: CustomDataTable.UpdateMode) -> None:
+
+        footer_static = self.query_one("#footer_static", Static)
+        nums = "1-6" if mode == CustomDataTable.UpdateMode.NO_GROUP else "1-5"
+        footer_static.update(
+            f"[dim yellow]{nums}[/] Sort columns │ "
+            "[dim yellow]Tab[/] Cycle focus │ "
+            "[dim yellow]Click[/] Headers to sort │ "
+            "[dim yellow]Ctrl+q[/] Quit",
+        )
 
     @on(OptionsBar.GroupByLang)
     def group_by_lang(self) -> None:
         self.table.group_by_lang()
+        self.update_footer_static(CustomDataTable.UpdateMode.GROUP_BY_LANG)
 
     @on(OptionsBar.GroupByDir)
     def group_by_dir(self) -> None:
         self.table.group_by_dir()
+        self.update_footer_static(CustomDataTable.UpdateMode.GROUP_BY_DIR)
 
     @on(OptionsBar.NoGroup)
     def no_group(self) -> None:
         self.table.no_group()
+        self.update_footer_static(CustomDataTable.UpdateMode.NO_GROUP)
+
+    @on(Button.Pressed, "#quit_button")
+    def quit_button_pressed(self) -> None:
+        # this forces it to clear when exiting:
+        self.app._exit_renderables.append("")  # type: ignore[unused-ignore]
+        self.app.exit()
+
+    @on(Button.Pressed, "#quit_no_clear")
+    def quit_button_no_clear_pressed(self) -> None:
+        self.app.exit()
 
 
 class ClocTUI(App[None]):
@@ -538,6 +680,11 @@ class ClocTUI(App[None]):
     def on_ready(self) -> None:
 
         self.run_worker(self.execute_cloc, description="Executing CLOC process", thread=True)
+
+    async def action_quit(self) -> None:
+        # this forces it to clear when exiting:
+        self._exit_renderables.append("")
+        self.exit()
 
     def execute_cloc(self) -> None:
         """Executes the CLOC command and returns the parsed JSON result."""
