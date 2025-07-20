@@ -1,5 +1,12 @@
 # CLOCTUI Changelog
 
+## 0.2.3 - (2025-07-19)
+
+- Refactored app again to push a new screen every time the group mode is changed. This was necessary to fix the issue with the table not resizing properly when switching between group modes.
+- Implemented logic in python to dynamically set the maximum height for the table based on the terminal size.
+- Set background to transparent and turned ansi_color to True in the app class.
+- Changed button style to transparent buttons.
+
 ## 0.2.2 - (2025-07-19)
 
 - Made check for CLOC installation run before empty path check.
