@@ -1,5 +1,9 @@
 # CLOCTUI Changelog
 
+## 0.2.4 - (2025-07-20)
+
+- Added check for whether the given path exists and is a directory before running CLOC.
+
 ## 0.2.3 - (2025-07-19)
 
 - Refactored app again to push a new screen every time the group mode is changed. This was necessary to fix the issue with the table not resizing properly when switching between group modes.
