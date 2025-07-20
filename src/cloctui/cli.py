@@ -39,13 +39,18 @@ scoop install cloc               # Windows with Scoop
     "--fullscreen", "-f", is_flag=True, default=False, help="Run in fullscreen / full terminal mode"
 )
 def cli(path: str | None, fullscreen: bool = False) -> None:
-    """CLI for CLOCTUI"""
+    """
+    CLOCTUI - a terminal frontend for CLOC (Count Lines of Code).
+
+    Path must be provided. Use '.' for the current directory or specify a path to a directory.
+    """
 
     # Use shutil.which to check if cloc is in PATH
     if shutil.which("cloc") is None:
         click.echo(error_message)
         return
 
+    # Check if cloc command is available by running it
     try:
         subprocess.run(
             ["cloc", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -54,14 +59,27 @@ def cli(path: str | None, fullscreen: bool = False) -> None:
         click.echo(error_message)
         return
 
-    # If no main argument is provided, scan current directory.
+    # After confirming the user has CLOC installed, proceed with checking the path
+    # If no main argument is provided, do nothing
     if path is None:
-        click.echo("No path provided")
+        click.echo(
+            "CLOCTUI - a terminal frontend for CLOC (Count Lines of Code).\n\n"
+            "Path must be provided. Use '.' for the current directory or specify a path to a directory."
+        )
         return
 
     else:
-
+        from pathlib import Path
         from cloctui.main import ClocTUI
+
+        path_obj = Path(path).expanduser().resolve()
+        if not path_obj.exists():
+            click.echo(f"Path '{path}' does not exist.")
+            return
+        
+        if not path_obj.is_dir():
+            click.echo(f"Path '{path}' is not a directory.")
+            return
 
         inline = not fullscreen
 
