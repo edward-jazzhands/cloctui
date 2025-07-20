@@ -1,20 +1,26 @@
 # CLOCTUI
 
-![badge](https://img.shields.io/badge/linted-Ruff-blue?&logo=ruff)
-![badge](https://img.shields.io/badge/formatted-black-black?)
-![badge](https://img.shields.io/badge/type_checked-MyPy-blue?&logo=python)
 ![badge](https://img.shields.io/badge/license-MIT-blue?)
 [![Framework: Textual](https://img.shields.io/badge/framework-Textual-5967FF?logo=python)](https://www.textualize.io/)
 
-CLOCTUI is a terminal user interface (TUI) for the CLOC code analysis tool, built using the Textual framework. It provides an interactive way to analyze code metrics directly from the terminal.
+<img width="1496" height="838" alt="preview" src="https://github.com/user-attachments/assets/9794bfe9-df5a-479f-8ced-9c316c19dfd9" />
 
-CLOCTUI runs CLOC under the hood and then displays the results in an interactive Textual table. It supports various features such as sorting and filtering the results, making it easier to analyze codebases.
+CLOCTUI is a terminal user interface (TUI) for the CLOC code analysis tool, built using the Textual framework.
 
-## How To Use
+CLOCTUI runs CLOC under the hood and then displays the results in an interactive Textual table. It will make the results of CLOC much more pleasant to interact with, especially for large code bases.
 
-CLOCTUI is designed to be run from the command line using either `pipx` or `uvx`. It requires Python 3.10 or higher.
+## Features:
 
-Enter the path you want to scan as the only argument:
+- Group by language, directory, or show all individual files. This works the same as CLOC's different modes, but interactive.
+- Sort any column in the table by clicking the header or using keyboard shortcuts.
+- You can run in Inline mode (default), or run in fullscreen mode with the -f flag.
+
+## Test without installing
+
+You can test CLOCTUI without installing it by using [UV](https://docs.astral.sh/uv/) or [PipX](https://pipx.pypa.io/stable/).
+
+Using the `uvx` or `pipx run` commands:
+Enter `uvx cloctui` (or `pipx run`) followed by the path you want to scan as the only argument:
 
 ```sh
 uvx cloctui src
@@ -32,11 +38,39 @@ A dot would likewise scan the current directory:
 uvx cloctui .
 ```
 
-Use the `--help` option for an explanation in your terminal.
+## How to Install
+
+The recommended way to use CLOCTUI is as a global tool managed with [UV](https://docs.astral.sh/uv/) or [PipX](https://pipx.pypa.io/stable/).
+
+```sh
+uv tool install cloctui
+```
+
+```sh
+pipx install cloctui
+```
+
+Once installed, you can use the `cloctui` command anywhere. To scan the `src` folder in your current directory:
+
+```sh
+cloctui src
+```
+
+## Fullscreen mode
+
+You can use the `-f` flag to run in Fullscreen mode
+
+```sh
+cloctui src -f
+```
+
+## Future roadmap
+
+CLOC is an awesome program, and there's numerous features it has which are not integrated into CLOCTUI. In the future if this tool gets any serious usage, I'd be more than happy to consider adding more cool CLOC feature integrations. (Please post any suggestions in the [Ideas discussion board](https://github.com/edward-jazzhands/cloctui/discussions) and not Issues)
 
 ## Questions, issues, suggestions?
 
-Feel free to post an issue.
+Feel free to raise issues and bugs in the issues section, and post any ideas / feature requests on the [Ideas discussion board](https://github.com/edward-jazzhands/cloctui/discussions).
 
 ## Video
 
